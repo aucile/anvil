@@ -5,20 +5,21 @@ import json
 import re
 import sys
 from pathlib import Path
-import anthropic
-from openai import OpenAI
 from dotenv import load_dotenv
 
-from anvil import storage
+from anvil import providers, storage
 
 load_dotenv()
 
-claude = anthropic.Anthropic()
-ollama = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
-
-WORKER_MODEL = "qwen2.5-coder:3b"
-PLANNER_MODEL = "claude-sonnet-4-6"
 OUTPUT_DIR = Path("output")
+
+
+def _pick_model(tier: str) -> dict:
+    """Look up the first model registered for a tier in the models table."""
+    models = storage.get_models(tier)
+    if not models:
+        raise SystemExit(f"Error: no '{tier}' model registered in the models table.")
+    return models[0]
 
 
 def extract_json(text: str) -> dict:
@@ -29,22 +30,28 @@ def extract_json(text: str) -> dict:
     return json.loads(text)
 
 
-def run_subtask(subtask: str, model: str = WORKER_MODEL) -> str:
-    """Dispatch a subtask to a local worker model — fast and free."""
-    response = ollama.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": subtask}]
+def run_subtask(subtask: str, worker: dict, worker_client) -> str:
+    """Dispatch a subtask to a worker model."""
+    return providers.complete(
+        worker,
+        worker_client,
+        messages=[{"role": "user", "content": subtask}],
     )
-    return response.choices[0].message.content
 
 
 def orchestrate(request_text: str) -> str:
-    print(f"\nPlanner receives the request...")
+    planner = _pick_model("planner")
+    worker = _pick_model("worker")
+    planner_client = providers.get_client(planner)
+    worker_client = providers.get_client(worker)
+
+    print(f"\nPlanner ({planner['name']}) receives the request...")
     print(f'  "{request_text}"')
 
     # Step 1: Planner decomposes the request into subtasks
-    plan_response = claude.messages.create(
-        model=PLANNER_MODEL,
+    plan_text = providers.complete(
+        planner,
+        planner_client,
         max_tokens=500,
         system=(
             "You are a planner model that delegates work to smaller worker models. "
@@ -55,7 +62,7 @@ def orchestrate(request_text: str) -> str:
         messages=[{"role": "user", "content": request_text}]
     )
 
-    plan = extract_json(plan_response.content[0].text)
+    plan = extract_json(plan_text)
     subtasks = plan["subtasks"]
     print(f"\nPlanner produced {len(subtasks)} subtask(s):")
     for i, subtask in enumerate(subtasks, 1):
@@ -64,14 +71,15 @@ def orchestrate(request_text: str) -> str:
     # Step 2: Worker models handle each subtask
     results = {}
     for i, subtask in enumerate(subtasks, 1):
-        print(f"\nWorker runs subtask {i}: {subtask[:60]}{'...' if len(subtask) > 60 else ''}")
-        results[f"subtask_{i}"] = run_subtask(subtask)
+        print(f"\nWorker ({worker['name']}) runs subtask {i}: {subtask[:60]}{'...' if len(subtask) > 60 else ''}")
+        results[f"subtask_{i}"] = run_subtask(subtask, worker, worker_client)
         print(f"    ...subtask complete.")
 
     # Step 3: Planner synthesizes the final answer
     print(f"\nPlanner synthesizes the results into a final answer...")
-    final = claude.messages.create(
-        model=PLANNER_MODEL,
+    final_answer = providers.complete(
+        planner,
+        planner_client,
         max_tokens=5000,
         system=(
             "You are the planner model. Your workers have returned with their results. "
@@ -89,14 +97,12 @@ def orchestrate(request_text: str) -> str:
         }]
     )
 
-    final_answer = final.content[0].text
-
     request_id = storage.save_request(
         request_text=request_text,
         subtasks=subtasks,
         results=results,
         final_answer=final_answer,
-        model="qwen",
+        model=worker["name"],
     )
     print(f"\nRequest #{request_id} recorded in storage ({storage.DB_PATH})")
 

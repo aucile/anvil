@@ -46,9 +46,18 @@ def init_db(db_path: str = DB_PATH):
                 model_id TEXT NOT NULL,
                 provider TEXT NOT NULL,
                 specialty TEXT,
-                tier TEXT NOT NULL CHECK(tier IN ('planner', 'worker'))
+                tier TEXT NOT NULL CHECK(tier IN ('planner', 'worker')),
+                base_url TEXT,
+                key_name TEXT
             )
         """)
+        # Migrate pre-existing databases that lack the newer columns
+        existing_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(models)")
+        }
+        for column in ("base_url", "key_name"):
+            if column not in existing_cols:
+                conn.execute(f"ALTER TABLE models ADD COLUMN {column} TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,8 +80,9 @@ def init_db(db_path: str = DB_PATH):
 
         # Seed the known models
         conn.executemany(
-            "INSERT OR IGNORE INTO models (name, model_id, provider, specialty, tier) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO models "
+            "(name, model_id, provider, specialty, tier, base_url, key_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     "claude",
@@ -80,6 +90,8 @@ def init_db(db_path: str = DB_PATH):
                     "anthropic",
                     "task planning and synthesis",
                     "planner",
+                    None,
+                    "ANTHROPIC_API_KEY",
                 ),
                 (
                     "qwen",
@@ -87,9 +99,30 @@ def init_db(db_path: str = DB_PATH):
                     "ollama",
                     "code generation",
                     "worker",
+                    "http://localhost:11434/v1",
+                    None,
                 ),
             ],
         )
+        # Backfill seeded rows from databases created before these columns existed
+        conn.execute(
+            "UPDATE models SET key_name = 'ANTHROPIC_API_KEY' "
+            "WHERE name = 'claude' AND key_name IS NULL"
+        )
+        conn.execute(
+            "UPDATE models SET base_url = 'http://localhost:11434/v1' "
+            "WHERE name = 'qwen' AND base_url IS NULL"
+        )
+
+
+def get_models(tier: str, db_path: str = DB_PATH) -> list[dict]:
+    """Return all model rows for a tier ('planner' or 'worker')."""
+    with get_connection(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM models WHERE tier = ?", (tier,)
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def save_request(
