@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-from anvil import providers, storage
+from anvil import config, providers, storage
 
 load_dotenv()
 
@@ -15,10 +15,24 @@ OUTPUT_DIR = Path("output")
 
 
 def _pick_model(tier: str) -> dict:
-    """Look up the first model registered for a tier in the models table."""
+    """Pick a model for a tier using the saved planner/worker selection."""
     models = storage.get_models(tier)
     if not models:
         raise SystemExit(f"Error: no '{tier}' model registered in the models table.")
+
+    if tier == "planner":
+        preferred = config.get_planner_model()
+        if preferred:
+            for model in models:
+                if model["name"] == preferred:
+                    return model
+    else:
+        preferred = config.get_worker_model()
+        if preferred:
+            for model in models:
+                if model["name"] == preferred:
+                    return model
+
     return models[0]
 
 

@@ -1,10 +1,10 @@
 # AUTHOR: IAN SAVINO
 # DATE: 2026
 
-import os
-
 import anthropic
 from openai import OpenAI
+
+from anvil import config
 
 
 def get_client(model_row: dict):
@@ -14,8 +14,14 @@ def get_client(model_row: dict):
     is treated as OpenAI-compatible (Ollama, OpenAI, vLLM, etc.).
     """
     key_name = model_row.get("key_name")
-    api_key = os.environ.get(key_name) if key_name else None
+    api_key = config.get_api_key(key_name)
     base_url = model_row.get("base_url")
+
+    if key_name and not api_key:
+        raise SystemExit(
+            f"Error: model '{model_row['name']}' needs {key_name}, but it isn't "
+            f"set in the environment or saved config — run `anvil init`."
+        )
 
     if model_row["provider"] == "anthropic":
         return anthropic.Anthropic(api_key=api_key, base_url=base_url)
