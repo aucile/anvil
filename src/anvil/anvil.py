@@ -47,6 +47,15 @@ PRESETS = [
         "key_name": "DEEPSEEK_API_KEY",
         "specialty": "general assistant",
     },
+    {
+        "tag": "qwen",
+        "label": "Qwen — local Ollama model (RECOMMENDED WORKER; FURTHER CONFIG REQUIRED)",
+        "provider": "ollama",
+        "model_id": None,
+        "base_url": None,
+        "key_name": None,
+        "specialty": "worker"
+    }
 ]
 
 
@@ -139,6 +148,59 @@ def ensure_config():
         run_init()
 
 
+def view_config():
+    """Print the current model config: planner/worker selection, models, key status."""
+    cfg = config.load_config()
+    general = cfg.get("general", {})
+    planner = general.get("planner_model")
+    worker = general.get("worker_model")
+
+    location = str(config.CONFIG_PATH)
+    if not config.config_exists():
+        location += " (not created — run `anvil init`)"
+    print("Model configuration")
+    print(f"  config file: {location}")
+    print(f"  planner:     {planner or '(unset)'}")
+    print(f"  worker:      {worker or '(unset)'}")
+
+    models = storage.get_models()
+    print(f"\nRegistered models ({len(models)}):")
+    for m in models:
+        roles = [r for r, name in (("planner", planner), ("worker", worker)) if m["name"] == name]
+        tag = f"  <- {', '.join(roles)}" if roles else ""
+        print(f"  {m['name']:12} {m['model_id']:24} {m['provider']:18} tier={m['tier']}{tag}")
+
+    key_names = sorted({m["key_name"] for m in models if m["key_name"]})
+    if key_names:
+        saved = cfg.get("keys", {})
+        print("\nAPI keys:")
+        for key_name in key_names:
+            if os.environ.get(key_name):
+                status = "set in environment"
+            elif saved.get(key_name):
+                status = "saved in config"
+            else:
+                status = "MISSING — run `anvil init`"
+            print(f"  {key_name}: {status}")
+
+    print("\nEdit: `anvil init` to change planner/worker, `anvil -c <name>` to edit a model.")
+
+
+def reset_config():
+    """Delete the saved config file (planner/worker selection + saved API keys)."""
+    if not config.config_exists():
+        print("No config to reset.")
+        return
+    confirm = input(
+        f"Delete {config.CONFIG_PATH} (selection + saved API keys)? [y/N] "
+    ).strip().lower()
+    if confirm != "y":
+        print("Reset cancelled.")
+        return
+    config.CONFIG_PATH.unlink()
+    print("Config reset. Run `anvil init` to set up again.")
+
+
 def configure_model(name: str):
     """Interactively edit (or register) the model with the given tag."""
     existing = storage.get_model(name) or {
@@ -169,7 +231,7 @@ def configure_model(name: str):
             print(f"    {field} is required.")
 
     existing["model_id"] = ask("model_id", existing["model_id"], required=True)
-    existing["provider"] = ask("provider (anthropic/openai-compatible)", existing["provider"], required=True)
+    existing["provider"] = ask("provider (anthropic/openai-compatible/ollama)", existing["provider"], required=True)
     existing["specialty"] = ask("specialty", existing["specialty"])
     while True:
         tier = ask("tier (planner/worker)", existing["tier"], required=True)
@@ -193,11 +255,13 @@ def main():
     group.add_argument("-f", "--forget", action="store_true", help="erases storage memory")
     group.add_argument("-s", "--storage", action="store_true", help="access memory of requests")
     group.add_argument("-c", "--config", metavar="MODEL", type=str, help="edit or register the model with the given tag")
+    group.add_argument("-v", "--view", action="store_true", help="view the current model config (selection, models, key status)")
+    group.add_argument("--reset", action="store_true", help="reset the saved model config (planner/worker selection + saved keys)")
 
     args = parser.parse_args()
 
     # `anvil init` (bare) runs setup; with any flag set, "init" is just request text
-    if args.request == "init" and not (args.orchestrate or args.forget or args.storage or args.config):
+    if args.request == "init" and not (args.orchestrate or args.forget or args.storage or args.config or args.view or args.reset):
         run_init()
         sys.exit(0)
 
@@ -205,6 +269,14 @@ def main():
 
     if args.config:
         configure_model(args.config)
+        sys.exit(0)
+
+    if args.view:
+        view_config()
+        sys.exit(0)
+
+    if args.reset:
+        reset_config()
         sys.exit(0)
 
     if args.storage:
