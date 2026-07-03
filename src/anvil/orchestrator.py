@@ -4,6 +4,7 @@
 import json
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -82,12 +83,18 @@ def orchestrate(request_text: str) -> str:
     for i, subtask in enumerate(subtasks, 1):
         print(f"  [{i}] {subtask}")
 
-    # Step 2: Worker models handle each subtask
+    # Step 2: Worker models handle the subtasks in parallel
     results = {}
-    for i, subtask in enumerate(subtasks, 1):
-        print(f"\nWorker ({worker['name']}) runs subtask {i}: {subtask[:60]}{'...' if len(subtask) > 60 else ''}")
-        results[f"subtask_{i}"] = run_subtask(subtask, worker, worker_client)
-        print(f"    ...subtask complete.")
+    print(f"\nWorker ({worker['name']}) runs {len(subtasks)} subtask(s) in parallel...")
+    with ThreadPoolExecutor(max_workers=len(subtasks)) as pool:
+        futures = {
+            pool.submit(run_subtask, subtask, worker, worker_client): i
+            for i, subtask in enumerate(subtasks, 1)
+        }
+        for future in as_completed(futures):
+            i = futures[future]
+            results[f"subtask_{i}"] = future.result()
+            print(f"    ...subtask {i} complete.")
 
     # Step 3: Planner synthesizes the final answer
     print(f"\nPlanner synthesizes the results into a final answer...")
@@ -121,7 +128,7 @@ def orchestrate(request_text: str) -> str:
     print(f"\nRequest #{request_id} recorded in storage ({storage.DB_PATH})")
 
     # Extract only the code block(s) from the answer
-    code_blocks = re.findall(r"```(?:python)?\s*\n(.*?)```", final_answer, re.DOTALL)
+    code_blocks = re.findall(r"```python?\s*\n(.*?)```", final_answer, re.DOTALL)
     code = "\n\n".join(block.strip() for block in code_blocks)
     if not code:
         # Fallback: store the raw answer as a comment if no code block was found

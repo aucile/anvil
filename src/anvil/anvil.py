@@ -79,52 +79,111 @@ def _asked(answer):
     return answer
 
 
+KNOWN_PROVIDERS = ("anthropic", "openai-compatible", "openai", "ollama")
+
+CUSTOM_CHOICE = "__custom__"
+
+
+def _validate_provider(value: str):
+    if value.strip() in KNOWN_PROVIDERS:
+        return True
+    return (
+        f"Error: unknown provider '{value.strip()}' — "
+        "must be anthropic, openai-compatible, or ollama"
+    )
+
+
+def _custom_model(tier: str) -> dict:
+    """Prompt for a custom model's specs and register it for the given role."""
+    name = _asked(questionary.text(
+        "Model name (tag used to reference it):",
+        validate=lambda v: bool(v.strip()) or "name is required",
+    ).ask()).strip()
+
+    model = storage.get_model(name) or {
+        "name": name,
+        "model_id": "",
+        "provider": "",
+        "specialty": None,
+        "tier": tier,
+        "base_url": None,
+        "key_name": None,
+    }
+
+    model["model_id"] = _asked(questionary.text(
+        "model_id (the provider's model identifier):",
+        default=model["model_id"] or "",
+        validate=lambda v: bool(v.strip()) or "model_id is required",
+    ).ask()).strip()
+    model["provider"] = _asked(questionary.text(
+        "provider (anthropic/openai-compatible/ollama):",
+        default=model["provider"] or "",
+        validate=_validate_provider,
+    ).ask()).strip()
+    model["specialty"] = _asked(questionary.text(
+        "specialty (free text, blank to skip):",
+        default=model["specialty"] or "",
+    ).ask()).strip() or None
+    model["base_url"] = _asked(questionary.text(
+        "base_url (blank for Anthropic and Ollama):",
+        default=model["base_url"] or "",
+    ).ask()).strip() or None
+    model["key_name"] = _asked(questionary.text(
+        "key_name (env var for the API key, blank for Ollama):",
+        default=model["key_name"] or "",
+    ).ask()).strip() or None
+    model["tier"] = tier
+
+    storage.upsert_model(model)
+    return model
+
+
+def _select_model(role: str) -> dict:
+    """Pick a preset for the given role, or define a custom model via 'Other'."""
+    choices = [questionary.Choice(title=p["label"], value=p) for p in PRESETS]
+    choices.append(questionary.Choice(
+        title="Other — add your own model (custom specs)", value=CUSTOM_CHOICE,
+    ))
+    preset = _asked(questionary.select(
+        f"Select your {role} model preset:", choices=choices,
+    ).ask())
+    if preset == CUSTOM_CHOICE:
+        return _custom_model(role)
+
+    model = storage.get_model(preset["tag"]) or {
+        "name": preset["tag"],
+        "model_id": preset["model_id"],
+        "provider": preset["provider"],
+        "specialty": preset["specialty"],
+        "tier": role,
+        "base_url": preset["base_url"],
+        "key_name": preset["key_name"],
+    }
+    model["model_id"] = _asked(questionary.text(
+        f"Model id for '{model['name']}':",
+        default=model["model_id"] or "",
+        validate=lambda v: bool(v.strip()) or "model_id is required",
+    ).ask()).strip()
+    model["provider"] = preset["provider"]
+    model["specialty"] = preset["specialty"]
+    model["tier"] = role
+    model["base_url"] = preset["base_url"]
+    model["key_name"] = preset["key_name"]
+    storage.upsert_model(model)
+    return model
+
+
 def run_init():
-    """Interactive setup: choose planner and worker model presets and store any needed API keys."""
+    """Interactive setup: choose planner and worker models and store any needed API keys."""
     storage.init_db()
     existing = config.load_config()
 
-    # 1. Pick a planner model preset first
-    planner_choice = _asked(questionary.select(
-        "Select your planner model preset:",
-        choices=[questionary.Choice(title=p["label"], value=p) for p in PRESETS],
-    ).ask())
+    planner = _select_model("planner")
+    worker = _select_model("worker")
 
-    # 2. Pick a secondary (worker) model preset
-    worker_choice = _asked(questionary.select(
-        "Select your worker model preset:",
-        choices=[questionary.Choice(title=p["label"], value=p) for p in PRESETS],
-        default=PRESETS[0],
-    ).ask())
-
-    selected = []
-    for preset in (planner_choice, worker_choice):
-        existing_model = storage.get_model(preset["tag"])
-        model = existing_model or {
-            "name": preset["tag"],
-            "model_id": preset["model_id"],
-            "provider": preset["provider"],
-            "specialty": preset["specialty"],
-            "tier": "planner" if preset is planner_choice else "worker",
-            "base_url": preset["base_url"],
-            "key_name": preset["key_name"],
-        }
-        model_id = _asked(questionary.text(
-            f"Model id for '{model['name']}':", default=model["model_id"],
-        ).ask()).strip()
-        if model_id and model_id != model["model_id"]:
-            model["model_id"] = model_id
-        model["provider"] = preset["provider"]
-        model["specialty"] = preset["specialty"]
-        model["tier"] = "planner" if preset is planner_choice else "worker"
-        model["base_url"] = preset["base_url"]
-        model["key_name"] = preset["key_name"]
-        storage.upsert_model(model)
-        selected.append(model)
-
-    # 3. Ask only for the keys the selected models actually reference
+    # Ask only for the keys the selected models actually reference
     keys = dict(existing.get("keys", {}))
-    for key_name in sorted({m["key_name"] for m in selected if m["key_name"]}):
+    for key_name in sorted({m["key_name"] for m in (planner, worker) if m["key_name"]}):
         hints = []
         if os.environ.get(key_name):
             hints.append("set in env — env wins")
@@ -137,7 +196,7 @@ def run_init():
         if value:
             keys[key_name] = value
 
-    config.save_model_selection(planner_choice["tag"], worker_choice["tag"], keys)
+    config.save_model_selection(planner["name"], worker["name"], keys)
     print(f"Config saved to {config.CONFIG_PATH} (permissions set to 600).")
 
 
