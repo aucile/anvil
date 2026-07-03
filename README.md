@@ -10,6 +10,8 @@ Every run is recorded in a local SQLite store.
 ## Install
 
 ```bash
+git clone git@github.com:aucile/anvil.git
+
 uv tool install .            # from the repo root — installs the global `anvil` command
 ```
 
