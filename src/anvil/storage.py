@@ -46,9 +46,18 @@ def init_db(db_path: str = DB_PATH):
                 model_id TEXT NOT NULL,
                 provider TEXT NOT NULL,
                 specialty TEXT,
-                tier TEXT NOT NULL CHECK(tier IN ('planner', 'worker'))
+                tier TEXT NOT NULL CHECK(tier IN ('planner', 'worker')),
+                base_url TEXT,
+                key_name TEXT
             )
         """)
+        # Migrate pre-existing databases that lack the newer columns
+        existing_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(models)")
+        }
+        for column in ("base_url", "key_name"):
+            if column not in existing_cols:
+                conn.execute(f"ALTER TABLE models ADD COLUMN {column} TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,8 +80,9 @@ def init_db(db_path: str = DB_PATH):
 
         # Seed the known models
         conn.executemany(
-            "INSERT OR IGNORE INTO models (name, model_id, provider, specialty, tier) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO models "
+            "(name, model_id, provider, specialty, tier, base_url, key_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     "claude",
@@ -80,6 +90,8 @@ def init_db(db_path: str = DB_PATH):
                     "anthropic",
                     "task planning and synthesis",
                     "planner",
+                    None,
+                    "ANTHROPIC_API_KEY",
                 ),
                 (
                     "qwen",
@@ -87,8 +99,55 @@ def init_db(db_path: str = DB_PATH):
                     "ollama",
                     "code generation",
                     "worker",
+                    "http://localhost:11434/v1",
+                    None,
                 ),
             ],
+        )
+        # Backfill seeded rows from databases created before these columns existed
+        conn.execute(
+            "UPDATE models SET key_name = 'ANTHROPIC_API_KEY' "
+            "WHERE name = 'claude' AND key_name IS NULL"
+        )
+        conn.execute(
+            "UPDATE models SET base_url = 'http://localhost:11434/v1' "
+            "WHERE name = 'qwen' AND base_url IS NULL"
+        )
+
+
+def get_models(tier: str | None = None, db_path: str = DB_PATH) -> list[dict]:
+    """Return model rows, optionally filtered by tier ('planner' or 'worker')."""
+    with get_connection(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        if tier:
+            rows = conn.execute(
+                "SELECT * FROM models WHERE tier = ?", (tier,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM models ORDER BY name").fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_model(name: str, db_path: str = DB_PATH) -> dict | None:
+    """Return a single model row by name, or None if not registered."""
+    with get_connection(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM models WHERE name = ?", (name,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def upsert_model(model: dict, db_path: str = DB_PATH):
+    """Insert or update a model row keyed by name."""
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "INSERT INTO models (name, model_id, provider, specialty, tier, base_url, key_name) "
+            "VALUES (:name, :model_id, :provider, :specialty, :tier, :base_url, :key_name) "
+            "ON CONFLICT(name) DO UPDATE SET "
+            "model_id = :model_id, provider = :provider, specialty = :specialty, "
+            "tier = :tier, base_url = :base_url, key_name = :key_name",
+            model,
         )
 
 
@@ -114,6 +173,10 @@ def save_request(
                 "VALUES (?, ?, ?, ?, ?)",
                 (request_id, i + 1, subtask, result, model),
             )
+            
+        if request_id == None:
+            raise SystemExit(f'Invalid request ID')
+        
         return request_id
 
 
