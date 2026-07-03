@@ -22,27 +22,27 @@ PRESETS = [
     },
     {
         "tag": "anthropic",
-        "label": "Anthropic — claude-3.5",
+        "label": "Anthropic — claude-sonnet-4-6",
         "provider": "anthropic",
-        "model_id": "claude-3.5",
+        "model_id": "claude-sonnet-4-6",
         "base_url": None,
         "key_name": "ANTHROPIC_API_KEY",
         "specialty": "general assistant",
     },
     {
         "tag": "grok",
-        "label": "Grok — grok-2.5",
+        "label": "Grok — grok-4",
         "provider": "openai-compatible",
-        "model_id": "grok-2.5",
-        "base_url": "https://api.grok.com/v1",
-        "key_name": "OPENAI_API_KEY",
+        "model_id": "grok-4",
+        "base_url": "https://api.x.ai/v1",
+        "key_name": "XAI_API_KEY",
         "specialty": "general assistant",
     },
     {
         "tag": "deepseek",
-        "label": "Deepseek — deepseek-1",
+        "label": "Deepseek — deepseek-chat",
         "provider": "openai-compatible",
-        "model_id": "deepseek-1",
+        "model_id": "deepseek-chat",
         "base_url": "https://api.deepseek.com/v1",
         "key_name": "DEEPSEEK_API_KEY",
         "specialty": "general assistant",
@@ -69,7 +69,7 @@ def read_storage(limit: int = 10):
         for sub in request["subtasks"]:
             print(f"  [{sub['subtask_index']}] {sub['subtask_text']}")
             print(f"      {sub['model']}: {str(sub['result'])[:200]}")
-        print(f"Final answer: {request['final_answer'][:300]}...")
+        print(f"Final answer: {(request['final_answer'] or '(none)')[:300]}...")
 
 
 def _asked(answer):
@@ -231,7 +231,12 @@ def configure_model(name: str):
             print(f"    {field} is required.")
 
     existing["model_id"] = ask("model_id", existing["model_id"], required=True)
-    existing["provider"] = ask("provider (anthropic/openai-compatible/ollama)", existing["provider"], required=True)
+    while True:
+        provider = ask("provider (anthropic/openai-compatible/ollama)", existing["provider"], required=True)
+        if provider in ("anthropic", "openai-compatible", "openai", "ollama"):
+            existing["provider"] = provider
+            break
+        print("    provider must be 'anthropic', 'openai-compatible', or 'ollama'.")
     existing["specialty"] = ask("specialty", existing["specialty"])
     while True:
         tier = ask("tier (planner/worker)", existing["tier"], required=True)
@@ -265,6 +270,16 @@ def main():
         run_init()
         sys.exit(0)
 
+    # Handle --forget before init_db(), which would recreate the file just to delete it
+    if args.forget:
+        db_path = Path(storage.DB_PATH)
+        if db_path.exists():
+            db_path.unlink()
+            print("Storage has been erased.")
+        else:
+            print("No storage database found.")
+        sys.exit(0)
+
     storage.init_db()
 
     if args.config:
@@ -283,15 +298,6 @@ def main():
         read_storage()
         sys.exit(0)
 
-    if args.forget:
-        db_path = Path(storage.DB_PATH)
-        if db_path.exists():
-            db_path.unlink()
-            print("Storage has been erased.")
-        else:
-            print("No storage database found.")
-        sys.exit(0)
-
     if (args.orchestrate and args.request):
         ensure_config()
         from anvil import orchestrator
@@ -304,5 +310,7 @@ def main():
         print("What is your request?")
         err_request = input("Enter it here: ")
         print(orchestrator.orchestrate(err_request))
+    else:
+        parser.print_help()
 
 if __name__ == "__main__": main()
