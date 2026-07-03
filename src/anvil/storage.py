@@ -115,14 +115,40 @@ def init_db(db_path: str = DB_PATH):
         )
 
 
-def get_models(tier: str, db_path: str = DB_PATH) -> list[dict]:
-    """Return all model rows for a tier ('planner' or 'worker')."""
+def get_models(tier: str | None = None, db_path: str = DB_PATH) -> list[dict]:
+    """Return model rows, optionally filtered by tier ('planner' or 'worker')."""
     with get_connection(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT * FROM models WHERE tier = ?", (tier,)
-        ).fetchall()
+        if tier:
+            rows = conn.execute(
+                "SELECT * FROM models WHERE tier = ?", (tier,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM models ORDER BY name").fetchall()
         return [dict(row) for row in rows]
+
+
+def get_model(name: str, db_path: str = DB_PATH) -> dict | None:
+    """Return a single model row by name, or None if not registered."""
+    with get_connection(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM models WHERE name = ?", (name,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def upsert_model(model: dict, db_path: str = DB_PATH):
+    """Insert or update a model row keyed by name."""
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "INSERT INTO models (name, model_id, provider, specialty, tier, base_url, key_name) "
+            "VALUES (:name, :model_id, :provider, :specialty, :tier, :base_url, :key_name) "
+            "ON CONFLICT(name) DO UPDATE SET "
+            "model_id = :model_id, provider = :provider, specialty = :specialty, "
+            "tier = :tier, base_url = :base_url, key_name = :key_name",
+            model,
+        )
 
 
 def save_request(
@@ -147,6 +173,10 @@ def save_request(
                 "VALUES (?, ?, ?, ?, ?)",
                 (request_id, i + 1, subtask, result, model),
             )
+            
+        if request_id == None:
+            raise SystemExit(f'Invalid request ID')
+        
         return request_id
 
 
