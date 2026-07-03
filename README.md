@@ -50,7 +50,11 @@ selected for both planner and worker — e.g. an all-local Ollama setup.
 ## Adding models
 
 Anvil ships with presets (OpenAI, Anthropic, Grok, Deepseek, Qwen) surfaced by
-`anvil init`. To register any other model, or edit an existing one:
+`anvil init`. The same menu also has an **Other** option that lets you enter a
+custom model's specs inline (model_id, provider, base_url, key_name, …) — the
+provider must be one of `anthropic`, `openai-compatible`, or `ollama`, and
+anything else is rejected. To register any other model outside of `init`, or
+edit an existing one:
 
 ```bash
 anvil -c <name>
