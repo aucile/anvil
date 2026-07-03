@@ -15,24 +15,24 @@ OUTPUT_DIR = Path("output")
 
 
 def _pick_model(tier: str) -> dict:
-    """Pick a model for a tier using the saved planner/worker selection."""
+    """Pick a model for a role, honoring the saved planner/worker selection.
+
+    The configured model is fetched by name directly, so the same model can
+    serve as both planner and worker (e.g. a fully local Ollama setup) and the
+    stored `tier` column no longer has to match the requested role.
+    """
+    preferred = (
+        config.get_planner_model() if tier == "planner"
+        else config.get_worker_model()
+    )
+    if preferred:
+        model = storage.get_model(preferred)
+        if model:
+            return model
+
     models = storage.get_models(tier)
     if not models:
         raise SystemExit(f"Error: no '{tier}' model registered in the models table.")
-
-    if tier == "planner":
-        preferred = config.get_planner_model()
-        if preferred:
-            for model in models:
-                if model["name"] == preferred:
-                    return model
-    else:
-        preferred = config.get_worker_model()
-        if preferred:
-            for model in models:
-                if model["name"] == preferred:
-                    return model
-
     return models[0]
 
 
